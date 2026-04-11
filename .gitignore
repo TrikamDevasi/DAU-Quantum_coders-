@@ -1,0 +1,4 @@
+user_segment_profiles.parquet
+product_catalog.parquet
+competitor_pricing_feed.parquet
+clickstream_events.parquet

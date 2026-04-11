@@ -102,5 +102,54 @@ export async function calculateWithRedis(product, sessionData = {}) {
     redisGetInt(`views:15m:${product.id}`),
     getCompetitorPrice(product.id, product.basePrice)
   ]);
+  
+  // Attempt to use ML service for A/B Treatment
+  if (sessionData.abVariant !== 'control') {
+    try {
+      const mlUrl = process.env.ML_SERVICE_URL || 'http://localhost:8000';
+      const userSegment = sessionData.userSegment || 'standard';
+      const demandScore = Math.min(recentViews || 0, 50) / 50.0;
+      const mlRes = await fetch(
+        `${mlUrl}/price-predict?product_id=${product.id}&demand_score=${demandScore}&stock=${product.stock || 100}&user_segment=${userSegment}`,
+        { signal: AbortSignal.timeout(1000) }
+      );
+      
+      if (mlRes.ok) {
+        const mlData = await mlRes.json();
+        if (mlData && typeof mlData.uplift_factor === 'number') {
+          let price = product.basePrice * (1 + mlData.uplift_factor);
+          
+          // Apply competitor matching logic if necessary
+          if (competitorPrice) {
+            const targetPrice = competitorPrice * 0.95;
+            if (targetPrice < price) {
+               // We might choose to still undercut competitor slightly
+               price = targetPrice;
+               mlData.price_reason = 'Competitor Match';
+            }
+          }
+
+          // Enforcement bounds
+          price = Math.max(price, product.mrp * 0.7);
+          price = Math.min(price, product.mrp);
+          price = Math.round(price);
+          
+          const discount = Math.round(((product.mrp - price) / product.mrp) * 100);
+          
+          return {
+            price,
+            reason: mlData.price_reason || 'ai_dynamic_pricing',
+            discount,
+            userSegment,
+            model: mlData.model
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`ML pricing service unreachable for product ${product.id}, falling back:`, err.message);
+    }
+  }
+
+  // Fallback to local rule-based pricing
   return calculate(product, sessionData, recentViews, competitorPrice);
 }

@@ -7,7 +7,7 @@ import Product from './src/models/Product.js';
 import PriceHistory from './src/models/PriceHistory.js';
 import Session from './src/models/Session.js';
 import { calculateWithRedis } from './src/services/pricingEngine.js';
-import { redisSet } from './src/config/redis.js';
+import { redisSet, getRedis } from './src/config/redis.js';
 import { broadcastSSE } from './src/routes/products.js';
 
 const PORT = process.env.PORT || 5000;
@@ -29,8 +29,15 @@ async function start() {
   // ── Background Job 1: Price Simulation (every 45 seconds) ─────────────────
   setInterval(async () => {
     try {
-      const count = await Product.countDocuments();
+        const count = await Product.countDocuments();
       if (count === 0) return;
+
+      // Prevent race conditions in multi-node setups
+      const redisClient = getRedis();
+      if (redisClient) {
+        const lock = await redisClient.set('lock:price_sim', '1', 'NX', 'EX', 40);
+        if (!lock) return; // Another instance is already running this simulation
+      }
 
       // Pick 2-3 random products
       const numToUpdate = Math.floor(Math.random() * 2) + 2;
@@ -38,7 +45,8 @@ async function start() {
       const shuffled = allProducts.sort(() => Math.random() - 0.5).slice(0, numToUpdate);
 
       for (const product of shuffled) {
-        const { price, reason, discount } = await calculateWithRedis(product);
+        // Enforce treatment variant to actively use and showcase the ML Pricing Engine
+        const { price, reason, discount } = await calculateWithRedis(product, { abVariant: 'treatment', userSegment: 'value_seeker' });
 
         const oldPrice = product.livePrice;
 

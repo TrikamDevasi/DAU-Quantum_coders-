@@ -17,20 +17,20 @@ def evaluate_recommendations() -> dict:
     if not content_rec.trained:
         content_rec.train()
 
-    # Build test set: for each product, what did users buy after viewing it?
-    purchase_events = list(db.events.find(
+    # Build test set cursors and iterate lazily
+    purchase_events_cursor = db.events.find(
         {"eventType": "purchase"},
         {"sessionId": 1, "productId": 1}
-    ).limit(5000))
+    ).limit(5000)
 
-    view_events = list(db.events.find(
+    view_events_cursor = db.events.find(
         {"eventType": "page_view"},
         {"sessionId": 1, "productId": 1}
-    ).limit(10000))
+    ).limit(10000)
 
-    # Group: sessionId -> viewed products
+    # Group: sessionId -> viewed products (Lazily processed)
     session_views = {}
-    for e in view_events:
+    for e in view_events_cursor:
         sid = str(e.get("sessionId", ""))
         pid = str(e.get("productId", "")) if e.get("productId") else None
         if sid and pid:
@@ -38,7 +38,7 @@ def evaluate_recommendations() -> dict:
 
     # Group: sessionId -> purchased products
     session_purchases = {}
-    for e in purchase_events:
+    for e in purchase_events_cursor:
         sid = str(e.get("sessionId", ""))
         pid = str(e.get("productId", "")) if e.get("productId") else None
         if sid and pid:
